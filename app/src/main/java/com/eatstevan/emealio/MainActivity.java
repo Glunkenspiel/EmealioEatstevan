@@ -20,7 +20,8 @@ import android.webkit.WebViewClient;
 
 /**
  * Thin native shell. The whole UI lives in assets/index.html; this class hosts it in a WebView and
- * gives it three native capabilities: persistent storage, the Android share sheet, and back handling.
+ * gives it native capabilities: persistent storage, the Android share sheet, back handling, and
+ * family sharing through {@link Sync}.
  */
 public class MainActivity extends Activity {
 
@@ -29,6 +30,8 @@ public class MainActivity extends Activity {
     private static final String HOME = "file:///android_asset/index.html";
 
     private WebView web;
+    private Sync sync;
+    private boolean started;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -46,8 +49,20 @@ public class MainActivity extends Activity {
         s.setAllowContentAccess(false);
         s.setTextZoom(100);
 
+        sync = new Sync(this, getSharedPreferences(PREFS, MODE_PRIVATE), new Sync.Listener() {
+            @Override public void onStatus(String json) { callJs("onSync", json); }
+            @Override public void onRemote(String json) { callJs("onRemote", json); }
+        });
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (!started) {
+                    started = true;
+                    sync.start();
+                }
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
@@ -95,8 +110,15 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** Calls window.fn(json) in the page. The argument is JSON, which is also a JavaScript literal. */
+    private void callJs(String fn, String json) {
+        String safe = json.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029");
+        web.evaluateJavascript("window." + fn + " && window." + fn + "(" + safe + ")", null);
+    }
+
     @Override
     protected void onDestroy() {
+        sync.stop();
         web.destroy();
         super.onDestroy();
     }
@@ -114,6 +136,24 @@ public class MainActivity extends Activity {
             SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
             e.putString(KEY_STATE, json).apply();
         }
+
+        @JavascriptInterface
+        public void signIn() { runOnUiThread(() -> sync.signIn()); }
+
+        @JavascriptInterface
+        public void signOut() { runOnUiThread(() -> sync.signOut()); }
+
+        @JavascriptInterface
+        public void createFamily(final String dataJson) { runOnUiThread(() -> sync.create(dataJson)); }
+
+        @JavascriptInterface
+        public void joinFamily(final String code) { runOnUiThread(() -> sync.join(code)); }
+
+        @JavascriptInterface
+        public void leaveFamily() { runOnUiThread(() -> sync.leave()); }
+
+        @JavascriptInterface
+        public void push(final String opsJson) { runOnUiThread(() -> sync.push(opsJson)); }
 
         @JavascriptInterface
         public void share(final String title, final String text) {

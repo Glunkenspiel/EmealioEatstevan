@@ -1,4 +1,4 @@
-/* Emealio Eatstevan — built-in supper library.
+/* Glonky Jobo — built-in supper library.
    Every recipe is scaled for a family of 5. WW points are per adult serving and are
    ESTIMATES only (lean proteins, fruit and non-starchy veg counted as zero).
    Ingredient format: "qty unit|name|aisle"  (unit "x" = a simple count)

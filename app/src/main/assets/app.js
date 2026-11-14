@@ -1,4 +1,4 @@
-/* Emealio Eatstevan — app logic. Runs inside the Android WebView (window.Android bridge)
+/* Glonky Jobo — app logic. Runs inside the Android WebView (window.Android bridge)
    and also in a plain browser for development (falls back to localStorage / Web Share). */
 (function () {
   'use strict';
@@ -17,10 +17,12 @@
   function loadRaw() {
     try { return bridge ? bridge.load() : localStorage.getItem('emealio'); } catch (e) { return null; }
   }
-  function save() {
+  function persist() {
     var s = JSON.stringify(state);
     try { if (bridge) bridge.save(s); else localStorage.setItem('emealio', s); } catch (e) { /* storage unavailable */ }
   }
+  /** Every local change goes through here: keep it on the phone, then send what changed to the family. */
+  function save() { persist(); pushDiff(); }
 
   function nextMonday() {
     var d = new Date(); d.setHours(12, 0, 0, 0);
@@ -44,6 +46,73 @@
     while (state.plan.length < DAYS) state.plan.push({ id: null, locked: false });
     state.plan.length = DAYS;
   })();
+
+  // ---------- family sharing ----------
+  // The native shell owns Google sign-in and the cloud document. This side only decides WHAT changed:
+  // the state is flattened into maps (one entry per night, per recipe, per grocery tick) so two people
+  // editing different things at the same moment never overwrite each other.
+  var sync = { available: false, user: null, household: null, members: [], busy: false };
+  var shadow = null; // the shared document as this phone last knew it
+  function toShape() {
+    var plan = {}, custom = {}, extras = {};
+    state.plan.forEach(function (s, i) { plan[i] = { id: s.id || null, locked: !!s.locked }; });
+    state.custom.forEach(function (m) { if (m && m.id) custom[m.id] = m; });
+    state.extras.forEach(function (x) { if (x && x.id) extras[x.id] = { name: x.name }; });
+    return JSON.parse(JSON.stringify({
+      v: 1, familySize: state.familySize, startDate: state.startDate, newPerWeek: state.newPerWeek, maxPts: state.maxPts,
+      fav: state.fav, hidden: state.hidden, checked: state.checked, plan: plan, custom: custom, extras: extras
+    }));
+  }
+  function isMap(x) { return x && typeof x === 'object' && !Array.isArray(x); }
+  function diff(a, b) {
+    var ops = [];
+    Object.keys(b).forEach(function (k) {
+      if (!isMap(b[k])) { if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) ops.push({ p: [k], v: b[k] }); return; }
+      var av = isMap(a[k]) ? a[k] : {}, bv = b[k];
+      Object.keys(bv).forEach(function (sk) { if (sk && JSON.stringify(av[sk]) !== JSON.stringify(bv[sk])) ops.push({ p: [k, sk], v: bv[sk] }); });
+      Object.keys(av).forEach(function (sk) { if (sk && !(sk in bv)) ops.push({ p: [k, sk], d: 1 }); });
+    });
+    return ops;
+  }
+  function pushDiff() {
+    if (!bridge || !sync.household || !shadow) return;
+    var now = toShape(), ops = diff(shadow, now);
+    if (!ops.length) return;
+    shadow = now;
+    try { bridge.push(JSON.stringify(ops)); } catch (e) { /* stays local until the next change */ }
+  }
+  function num(v, lo, hi, dflt) { v = +v; return isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : dflt; }
+  /** The shared document changed (possibly by us): make it the state on this phone. */
+  function applyShape(d) {
+    if (!isMap(d)) return;
+    state.familySize = num(d.familySize, 1, 12, state.familySize);
+    state.newPerWeek = num(d.newPerWeek, 0, 7, state.newPerWeek);
+    state.maxPts = num(d.maxPts, 0, 12, state.maxPts);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d.startDate)) state.startDate = d.startDate;
+    state.fav = isMap(d.fav) ? d.fav : {};
+    state.hidden = isMap(d.hidden) ? d.hidden : {};
+    state.checked = isMap(d.checked) ? d.checked : {};
+    var plan = isMap(d.plan) ? d.plan : {}, custom = isMap(d.custom) ? d.custom : {}, extras = isMap(d.extras) ? d.extras : {};
+    state.plan = [];
+    for (var i = 0; i < DAYS; i++) { var s = plan[i]; state.plan.push({ id: s && s.id ? String(s.id) : null, locked: !!(s && s.locked && s.id) }); }
+    state.custom = Object.keys(custom).sort().map(function (k) { return custom[k]; }).filter(function (m) { return isMap(m) && m.id && m.name; })
+      .map(function (m) { if (!Array.isArray(m.ing)) m.ing = []; if (!Array.isArray(m.tags)) m.tags = []; return m; });
+    state.extras = Object.keys(extras).sort().map(function (k) { return { id: k, name: String((extras[k] || {}).name || '') }; }).filter(function (x) { return x.name; });
+    shadow = toShape();
+    persist();
+    // keep whatever is being typed in the main view
+    var el = document.activeElement, keep = el && el.id && $main.contains(el) ? { id: el.id, v: el.value } : null;
+    render();
+    if (keep && document.getElementById(keep.id)) { var n = document.getElementById(keep.id); n.value = keep.v; n.focus(); }
+  }
+  window.onRemote = applyShape;
+  window.onSync = function (s) {
+    sync = s;
+    if (!s.household) shadow = null;
+    if (ui.sheet === 'sync') syncSheet();
+    render();
+    if (s.message) toast(s.message);
+  };
 
   var ui = { tab: 'plan', week: 0, filter: 'all', search: '', gweek: 0, sheet: null, undo: null };
 
@@ -203,7 +272,7 @@
 
   // ---------- share text ----------
   function planText() {
-    var out = ['Emealio Eatstevan: Supper Plan', 'Family of ' + state.familySize];
+    var out = ['Glonky Jobo: Supper Plan', 'Family of ' + state.familySize];
     for (var w = 0; w < 2; w++) {
       out.push('', 'WEEK ' + (w + 1));
       for (var d = w * 7; d < w * 7 + 7; d++) {
@@ -367,7 +436,8 @@
     for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle('on', tabs[i].getAttribute('data-tab') === ui.tab);
     var n = countLeft();
     document.getElementById('g-badge').textContent = n ? n : '';
-    document.getElementById('subtitle').textContent = '2 weeks of suppers · family of ' + state.familySize;
+    document.getElementById('subtitle').textContent = (sync.household ? 'Shared plan' : '2 weeks of suppers') + ' \u00B7 family of ' + state.familySize;
+    document.getElementById('btn-family').classList.toggle('live', !!sync.household);
   }
 
   // ---------- sheets ----------
@@ -548,6 +618,35 @@
     else share('Grocery list', groceryText(+v.slice(1)));
   }
 
+  function syncSheet() {
+    var b;
+    if (!sync.available) {
+      b = '<p class="note" style="margin-top:0">Family sharing lets two phones work on the same supper plan and grocery list, saved under your Google account.</p>' +
+          '<p class="note">It is not switched on in this copy of the app yet. It needs a free Firebase project created with your Google account; the steps are in SHARING-SETUP.md.</p>';
+    } else if (!sync.user) {
+      b = '<p class="note" style="margin-top:0">Sign in to keep the plan in your Google account and work on it together from two phones.</p>' +
+          '<button class="btn block" style="margin-top:14px" data-act="g-signin">Sign in with Google</button>';
+    } else if (!sync.household) {
+      b = '<p class="note" style="margin-top:0">Signed in as ' + esc(sync.user.email || sync.user.name) + '</p>' +
+          '<h3 class="sec">Start sharing</h3><button class="opt" data-act="g-create"><span class="ico">+</span><span><b>Share this phone\u2019s plan</b><small>Creates a family code to send to someone</small></span></button>' +
+          '<h3 class="sec">Or join a family</h3><div class="row"><input class="grow" id="join-code" type="text" maxlength="12" autocapitalize="characters" autocomplete="off" placeholder="Family code">' +
+          '<button class="btn" data-act="g-join">Join</button></div><p class="hint">Joining replaces the plan on this phone with the shared one.</p>' +
+          '<div style="margin-top:22px"><button class="btn ghost block" data-act="g-signout">Sign out</button></div>';
+    } else {
+      b = '<p class="note" style="margin-top:0">Everyone with this code sees the same plan, meals and grocery list. Changes show up on the other phone within seconds.</p>' +
+          '<div class="code">' + esc(sync.household) + '</div>' +
+          '<button class="btn block" data-act="g-invite">Send the family code</button>' +
+          '<h3 class="sec">Sharing with</h3><ul class="ing">' + (sync.members.length ? sync.members : ['Just you so far']).map(function (n) { return '<li><span>' + esc(n) + '</span></li>'; }).join('') + '</ul>' +
+          '<p class="hint">Signed in as ' + esc(sync.user.email || sync.user.name) + '</p>' +
+          '<div class="row" style="margin-top:18px"><button class="btn ghost grow" data-act="g-leave">Stop sharing</button><button class="btn ghost grow" data-act="g-signout">Sign out</button></div>';
+    }
+    if (sync.busy) b += '<p class="hint" style="text-align:center;margin-top:14px">Working\u2026 this needs an internet connection.</p>';
+    var val = (document.getElementById('join-code') || {}).value;
+    openSheet('Family sharing', b);
+    ui.sheet = 'sync';
+    if (val && document.getElementById('join-code')) document.getElementById('join-code').value = val;
+  }
+
   // ---------- toast ----------
   var toastTimer, $toast = document.getElementById('toast');
   function toast(msg, undo) {
@@ -619,6 +718,19 @@
         break;
       }
       case 'do-share': doShare(v); break;
+      case 'g-signin': if (bridge) bridge.signIn(); break;
+      case 'g-signout': if (bridge) bridge.signOut(); break;
+      case 'g-create': if (bridge) bridge.createFamily(JSON.stringify(toShape())); break;
+      case 'g-join': {
+        var code = document.getElementById('join-code').value.replace(/[^a-z0-9]/gi, '').toUpperCase();
+        if (code.length < 6) { toast('Enter the family code'); break; }
+        if (bridge) bridge.joinFamily(code);
+        break;
+      }
+      case 'g-leave': if (bridge) bridge.leaveFamily(); break;
+      case 'g-invite':
+        share('Join our supper plan', 'Join our supper plan in Glonky Jobo.\nOpen Family sharing (the people button), sign in with Google and enter this family code:\n\n' + sync.household);
+        break;
       case 'undo': if (ui.undo) { var f = ui.undo; ui.undo = null; $toast.classList.remove('on'); f(); } break;
       case 'close': closeSheet(); break;
     }
@@ -636,6 +748,7 @@
   $scrim.addEventListener('click', closeSheet);
   document.getElementById('btn-share').addEventListener('click', shareSheet);
   document.getElementById('btn-settings').addEventListener('click', settingsSheet);
+  document.getElementById('btn-family').addEventListener('click', syncSheet);
 
   /** Called by the Android back button. Returns true when the app handled it. */
   window.onBack = function () {
@@ -643,7 +756,7 @@
     if (ui.tab !== 'plan') { ui.tab = 'plan'; render(); return true; }
     return false;
   };
-  window.__app = { state: state, planText: planText, groceryText: groceryText, parseLine: parseLine, fmtQty: fmtQty, groceries: groceries };
+  window.__app = { state: state, toShape: toShape, diff: diff, planText: planText, groceryText: groceryText, parseLine: parseLine, fmtQty: fmtQty, groceries: groceries };
 
   render();
 })();

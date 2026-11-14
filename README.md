@@ -1,4 +1,4 @@
-# Emealio Eatstevan
+# Glonky Jobo
 
 Two weeks of simple, healthy, kid-friendly suppers for a family of 5, with a grocery list to match.
 
@@ -12,13 +12,16 @@ Two weeks of simple, healthy, kid-friendly suppers for a family of 5, with a gro
   Tick items off as you shop and add extras.
 - **Share** – sends the meal plan and/or grocery lists as plain text to Messages, Google Keep, email, or any other app.
 
-Everything is stored on the phone. The app needs no account, no permissions and no internet.
+- **Family sharing** – sign in with Google and two phones work on the same plan, meal library and grocery list.
+  This needs a one-time setup with your own Google account: see [SHARING-SETUP.md](SHARING-SETUP.md).
+
+Without family sharing everything is stored on the phone and the app needs no account and no internet.
 
 WW points are estimates per adult serving; check the WW app for exact values.
 
 ## Install
 
-Copy `EmealioEatstevan.apk` to the phone and open it (you will be asked to allow installing from that source).
+Copy `GlonkyJobo.apk` to the phone and open it (you will be asked to allow installing from that source).
 
 ## Build
 
@@ -35,3 +38,5 @@ The APK lands in `app/build/outputs/apk/debug/`.
 - `app/src/main/assets/` – the whole UI (`index.html`, `app.css`, `app.js`) and the meal library (`meals.js`).
   Open `index.html` in a desktop browser to work on it.
 - `app/src/main/java/.../MainActivity.java` – the native shell: hosts the UI and provides storage, the share sheet and the back button.
+- `app/src/main/java/.../Sync.java` – family sharing: Google sign-in and the shared Firestore document.
+- `firestore.rules` – the security rules to publish in your Firebase project.
